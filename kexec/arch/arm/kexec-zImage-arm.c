@@ -13,6 +13,9 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <libfdt.h>
 #include <arch/options.h>
 #include "../../kexec.h"
@@ -374,6 +377,79 @@ static const struct zimage_tag *find_extension_tag(const char *buf, off_t len,
 	return NULL;
 }
 
+int zImage_arm_load_file(int argc, char **argv, struct kexec_info *info)
+{
+	int ret = 0;
+	char *cmdline, *dtb;
+	int opt, cmdline_len = 0;
+	const char *ramdisk;
+
+	/* See options.h -- add any more there, too. */
+	static const struct option options[] = {
+		KEXEC_ARCH_OPTIONS
+		{ "command-line",       1, NULL, OPT_APPEND },
+		{ "append",             1, NULL, OPT_APPEND },
+		{ "ramdisk",            1, NULL, OPT_RAMDISK },
+		{ "initrd",             1, NULL, OPT_RAMDISK },
+		{ "dtb",		1, NULL, OPT_DTB },
+		{ 0,                    0, NULL, 0 },
+	};
+
+	static const char short_options[] = KEXEC_OPT_STR "";
+
+	/* Parse command line arguments */
+	cmdline = 0;
+	dtb = 0;
+	ramdisk = 0;
+
+	while ((opt = getopt_long(argc, argv, short_options,
+					options, 0)) != -1) {
+		switch (opt) {
+		default:
+			/* Ignore core options */
+			if (opt < OPT_ARCH_MAX)
+				break;
+		case OPT_APPEND:
+			cmdline = optarg;
+			break;
+		case OPT_RAMDISK:
+			ramdisk = optarg;
+			break;
+		case OPT_DTB:
+			dtb = optarg;
+			break;
+		}
+	}
+
+	if (dtb)
+		die("--dtb not supported while using --kexec-file-syscall.\n");
+
+	if (cmdline) {
+		cmdline_len = strlen(cmdline) + 1;
+	} else {
+		cmdline = strdup("\0");
+		cmdline_len = 1;
+	}
+
+	if (ramdisk) {
+		info->initrd_fd = open(ramdisk, O_RDONLY);
+		if (info->initrd_fd == -1) {
+			fprintf(stderr, "Could not open initrd file %s:%s\n",
+					ramdisk, strerror(errno));
+			ret = -1;
+			goto out;
+		}
+	}
+
+	info->command_line = cmdline;
+	info->command_line_len = cmdline_len;
+	return ret;
+out:
+	if (cmdline_len == 1)
+		free(cmdline);
+	return ret;
+}
+
 int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 	struct kexec_info *info)
 {
@@ -411,6 +487,9 @@ int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 		{ 0, 			0, 0, 0 },
 	};
 	static const char short_options[] = KEXEC_ARCH_OPT_STR "";
+
+	if (info->file_mode)
+		return zImage_arm_load_file(argc, argv, info);
 
 	/*
 	 * Parse the command line arguments
